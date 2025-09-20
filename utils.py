@@ -28,12 +28,14 @@ def make_openai_request(
     user_prompt: str,
     response_schema: BaseModel,
     schema_name: str,
-    temperature: float = 0
+    temperature: float = 0,
+    seed: int = 42
 ) -> Any:
     try:
         response = client.chat.completions.create(
             model=model_name,
             temperature=temperature,
+            seed=seed,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
