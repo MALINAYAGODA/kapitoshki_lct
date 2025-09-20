@@ -1,6 +1,7 @@
 from openai import OpenAI
 from tools.count_tokens import count_tokens
 import json
+import re
 from typing import Dict, Any, Optional, List, Tuple
 from pydantic import BaseModel
 
@@ -153,3 +154,34 @@ def print_processing_summary(
     print(f"Общие токены в входных данных: {total_input_tokens:,}")
     print(f"Общие токены в выходных данных: {total_output_tokens:,}")
     print(f"Результаты сохранены в: {output_filename}")
+
+
+def parse_catalog_and_schema_from_ddl(ddl_statements: List[Dict[str, Any]]) -> Tuple[Optional[str], Optional[str]]:
+    if not ddl_statements:
+        return None, None
+    
+    # Паттерн для поиска CREATE TABLE catalog.schema.table_name
+    pattern = r'CREATE\s+TABLE\s+([^.\s]+)\.([^.\s]+)\.([^.\s\(]+)'
+    
+    for ddl_item in ddl_statements:
+        statement = ddl_item.get("statement", "")
+        match = re.search(pattern, statement, re.IGNORECASE)
+        if match:
+            catalog = match.group(1)
+            schema = match.group(2)
+            print(f"Найден каталог: '{catalog}', схема: '{schema}'")
+            return catalog, schema
+    
+    print("Не удалось найти каталог и схему в DDL statements")
+    return None, None
+
+
+def get_database_config_from_data(data: Dict[str, Any], new_schema: str = "optimized") -> Dict[str, str]:
+    ddl_statements = data.get("ddl", [])
+    catalog, source_schema = parse_catalog_and_schema_from_ddl(ddl_statements)
+    
+    return {
+        "catalog": catalog or "unknown",
+        "source_schema": source_schema or "public", 
+        "new_schema": new_schema
+    }

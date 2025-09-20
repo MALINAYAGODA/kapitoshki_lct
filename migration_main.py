@@ -5,25 +5,29 @@ from utils import (
     load_json_file,
     save_json_file,
     make_openai_request,
-    calculate_and_print_tokens
+    calculate_and_print_tokens,
+    get_database_config_from_data
 )
 import json
 
 client = get_openai_client()
 model_name = "gpt-4.1"
+name_table = "data/questsH.json"
 
-flights_data = load_json_file("data/flights.json")
+input_data = load_json_file(name_table)
 ddl_output = load_json_file("response/ddl_output.json")
 
+# Автоматически извлекаем конфигурацию базы данных
+db_config = get_database_config_from_data(input_data)
 
-input_ddl_json = json.dumps(flights_data.get("ddl", []), ensure_ascii=False)
+input_ddl_json = json.dumps(input_data.get("ddl", []), ensure_ascii=False)
 new_ddl_json = json.dumps(ddl_output.get("ddl", []), ensure_ascii=False)
 
 system_prompt = MIGRATION_PROMPT
 user_prompt = INPUT_MIGRATION_PROMPT.format(
-    catalog="flights", 
-    source_schema="public", 
-    new_schema="optimized",
+    catalog=db_config["catalog"], 
+    source_schema=db_config["source_schema"], 
+    new_schema=db_config["new_schema"],
     input_ddl_json=input_ddl_json,
     new_ddl_json=new_ddl_json
 )

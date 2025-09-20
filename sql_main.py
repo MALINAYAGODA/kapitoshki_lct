@@ -5,20 +5,25 @@ from utils import (
     load_json_file,
     save_json_file,
     process_queries_batch,
-    print_processing_summary
+    print_processing_summary,
+    get_database_config_from_data
 )
 import json
 
 client = get_openai_client()
 model_name = "gpt-4.1"
+name_table = "data/questsH.json"
 
-flights_data = load_json_file("data/flights.json")
+input_data = load_json_file(name_table)
 ddl_output = load_json_file("response/ddl_output.json")
 
-queries = flights_data.get("queries", [])
+# Автоматически извлекаем конфигурацию базы данных
+db_config = get_database_config_from_data(input_data)
+
+queries = input_data.get("queries", [])
 new_ddl_json = json.dumps(ddl_output, ensure_ascii=False)
 
-system_prompt = SQL_PROMPT.format(catalog="flights", new_schema="optimized")
+system_prompt = SQL_PROMPT.format(catalog=db_config["catalog"], new_schema=db_config["new_schema"])
 
 # Обрабатываем все запросы с помощью утилиты
 rewritten_queries, total_input_tokens, total_output_tokens = process_queries_batch(
@@ -30,8 +35,8 @@ rewritten_queries, total_input_tokens, total_output_tokens = process_queries_bat
     response_schema=RewrittenQuery,
     schema_name="rewritten_query",
     additional_data={
-        "catalog": "flights",
-        "new_schema": "optimized",
+        "catalog": db_config["catalog"],
+        "new_schema": db_config["new_schema"],
         "new_ddl_json": new_ddl_json
     }
 )
