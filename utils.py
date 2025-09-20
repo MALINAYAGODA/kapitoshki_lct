@@ -6,7 +6,7 @@ from pydantic import BaseModel
 
 
 def get_openai_client() -> OpenAI:
-    api_key = "sk-svcacct-N_SwqUhS6U-HhniuGbwpFvpAZe5QZwKCyrzsnUWW9rIi7cnFIKGWi3whweIfQsT3BlbkFJ89GChN-RtBu9Ume-ebmvtZH7HESoZWvPxaGJ2ShrpFpo6_pYV7DtXDZjlA_IkA"
+    api_key = "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"
     return OpenAI(api_key=api_key)
 
 
