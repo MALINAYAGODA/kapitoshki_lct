@@ -1,14 +1,16 @@
-from tools.prompts import DDL_PROMPT, INPUT_DDL_PROMPT
+import json
+
+from get_counts import get_counts
 from tools.models import DDLGenerationOutput
+from tools.prompts import DDL_PROMPT, INPUT_DDL_PROMPT
 from utils import (
+    calculate_and_print_tokens,
+    get_database_config_from_data,
     get_openai_client,
     load_json_file,
-    save_json_file,
     make_openai_request,
-    calculate_and_print_tokens,
-    get_database_config_from_data
+    save_json_file,
 )
-import json
 
 client = get_openai_client()
 model_name = "gpt-4.1"
@@ -22,13 +24,21 @@ db_config = get_database_config_from_data(input_data)
 input_ddl_json = json.dumps(input_data.get("ddl", []), ensure_ascii=False)
 queries_json = json.dumps(input_data.get("queries", []), ensure_ascii=False)
 
+tables = []
+for ddl in input_data.get("ddl"):
+    tables.append(ddl["statement"].split()[2])
+
+counts = get_counts(input_data.get("url"), tables)
+print("Got counts from all tables")
+
 system_prompt = DDL_PROMPT
 user_prompt = INPUT_DDL_PROMPT.format(
-    catalog=db_config["catalog"], 
-    source_schema=db_config["source_schema"], 
+    catalog=db_config["catalog"],
+    source_schema=db_config["source_schema"],
     new_schema=db_config["new_schema"],
     input_ddl_json=input_ddl_json,
-    queries_json=queries_json
+    queries_json=queries_json,
+    stats=counts,
 )
 
 # Выполняем запрос к OpenAI API
@@ -38,7 +48,7 @@ ddl_out = make_openai_request(
     system_prompt=system_prompt,
     user_prompt=user_prompt,
     response_schema=DDLGenerationOutput,
-    schema_name="ddl_generation_output"
+    schema_name="ddl_generation_output",
 )
 
 # Сохраняем результат
