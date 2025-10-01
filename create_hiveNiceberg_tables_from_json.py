@@ -48,6 +48,13 @@ def run_ddl_from_json():
         sql_hive = sql_strip.replace(", format_version = 2", "").replace(", format_version=2", "")
         sql_hive = sql_hive.replace("flights.public", f"{HIVE_CATALOG}.{DEFAULT_SCHEMA}")
         sql_hive = sql_hive.replace("CREATE TABLE", "CREATE TABLE IF NOT EXISTS")
+        if "WITH (" in sql_hive.upper():
+            sql_hive = sql_hive.rstrip(")").rstrip()
+            if sql_hive.endswith(")"):  # защита от двойного удаления
+                sql_hive = sql_hive[:-1]
+            sql_hive += ", external_location = 's3a://warehouse/imported_data/' )"
+        else:
+            sql_hive += "\nWITH ( external_location = 's3a://warehouse/imported_data/' )"
         print(f"\nExecuting Hive table DDL (statement {i})...")
         print('-------- start --------')
         print(sql_hive)
@@ -67,6 +74,7 @@ def run_ddl_from_json():
         )
         AS SELECT * FROM {HIVE_CATALOG}.{DEFAULT_SCHEMA}.{table_name}
         """
+        print(sql_iceberg)
         print(f"Executing Iceberg table DDL for {iceberg_table_name}...")
         cursor.execute(sql_iceberg)
         print("Iceberg table created")

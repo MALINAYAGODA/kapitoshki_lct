@@ -49,7 +49,7 @@ def run_migrations_from_json():
 
         orig_target = match_insert.group(1)  # flights.optimized.flights
         base_table = orig_target.split(".")[-1]  # flights
-        new_target = f"{ICEBERG_CATALOG}.{DEFAULT_SCHEMA}.{base_table}_v2"
+        new_target = f"{ICEBERG_CATALOG}.{DEFAULT_SCHEMA}.{base_table}_iceberg_v2"
 
         sql_strip = re.sub(r"INSERT INTO\s+[^\s(]+",
                            f"INSERT INTO {new_target}",
@@ -64,7 +64,7 @@ def run_migrations_from_json():
 
         orig_source = match_from.group(1) 
         base_source = orig_source.split(".")[-1] 
-        new_source = f"{ICEBERG_CATALOG}.{DEFAULT_SCHEMA}.{base_source}"
+        new_source = f"{ICEBERG_CATALOG}.{DEFAULT_SCHEMA}.{base_source}_iceberg"
         print(new_source)
         sql_strip = re.sub(r"FROM\s+[^\s;]+",
                            f"FROM {new_source}",
