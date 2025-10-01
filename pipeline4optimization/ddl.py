@@ -16,7 +16,7 @@ DEFAULT_SCHEMA = "default"
 JSON_PATH = "response/ddl_output.json"
 HIVE_CATALOG = "hive"
 ICEBERG_CATALOG = "iceberg"
-S3_LOCATION = "s3a://warehouse/flights_iceberg/"
+S3_LOCATION = "s3a://warehouse/flights_iceberg"
 # =================================
 
 def transform_table_structure_with_new_ddl():
@@ -52,19 +52,18 @@ def transform_table_structure_with_new_ddl():
 
         original_table = match.group(1)  # напр. flights.optimized.flights
         base_table = original_table.split(".")[-1]  # flightscl
-        iceberg_table = f"{ICEBERG_CATALOG}.{DEFAULT_SCHEMA}.{base_table}_v2"
+        iceberg_table = f"{ICEBERG_CATALOG}.{DEFAULT_SCHEMA}.{base_table}_iceberg_v2"
 
         sql_fixed = re.sub(r"CREATE TABLE\s+[^\s(]+",
                            f"CREATE TABLE IF NOT EXISTS {iceberg_table}",
                            sql_strip,
                            flags=re.IGNORECASE)
-        print(sql_fixed)
         if "WITH (" in sql_fixed.upper():
                 sql_fixed = re.sub(r"WITH\s*\((.*?)\)",
-                                   rf"WITH (\1, location = '{S3_LOCATION}')",
+                                   rf"WITH (\1, location = '{S3_LOCATION}_v2/')",
                                    sql_fixed,
                                    flags=re.IGNORECASE | re.DOTALL)
-
+        print(sql_fixed)
         print(f"\nExecuting Iceberg table DDL for {iceberg_table}...")
         try:
             cursor.execute(sql_fixed)
