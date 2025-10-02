@@ -473,22 +473,6 @@ async def kafka_worker():
     """
     worker_logger.info("Инициализация воркера...")
 
-    # Подключение к БД
-    try:
-        db_pool = ThreadedConnectionPool(
-            Config.DB_POOL_MIN,
-            Config.DB_POOL_MAX,
-            host=Config.POSTGRES_HOST,
-            port=Config.POSTGRES_PORT,
-            database=Config.POSTGRES_DB,
-            user=Config.POSTGRES_USER,
-            password=Config.POSTGRES_PASSWORD,
-        )
-        worker_logger.info("Пул соединений с БД создан успешно")
-    except Exception as e:
-        worker_logger.error(f"Ошибка при создании пула соединений с БД: {e}")
-        raise
-
     # Kafka consumer (асинхронный) с исправленными настройками
     consumer = AIOKafkaConsumer(
         Config.KAFKA_TOPIC,
@@ -536,6 +520,22 @@ async def kafka_worker():
     worker_logger.info(
         f"🚀 Воркер запущен, ожидание задач из топика '{Config.KAFKA_TOPIC}'..."
     )
+
+    # Подключение к БД
+    try:
+        db_pool = ThreadedConnectionPool(
+            Config.DB_POOL_MIN,
+            Config.DB_POOL_MAX,
+            host=Config.POSTGRES_HOST,
+            port=Config.POSTGRES_PORT,
+            database=Config.POSTGRES_DB,
+            user=Config.POSTGRES_USER,
+            password=Config.POSTGRES_PASSWORD,
+        )
+        worker_logger.info("Пул соединений с БД создан успешно")
+    except Exception as e:
+        worker_logger.error(f"Ошибка при создании пула соединений с БД: {e}")
+        raise
 
     try:
         message_count = 0
