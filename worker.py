@@ -490,7 +490,7 @@ async def kafka_worker():
     worker_logger.info(f"Подписка на топик: {Config.KAFKA_TOPIC}, группа: llm_workers")
 
     max_retries = 10
-    retry_delay = 3
+    retry_delay = 10
 
     for attempt in range(1, max_retries + 1):
         try:
@@ -514,7 +514,6 @@ async def kafka_worker():
                 worker_logger.error(
                     "Не удалось подключиться к Kafka после всех попыток"
                 )
-                db_pool.closeall()
                 raise
 
     worker_logger.info(
