@@ -389,17 +389,17 @@ class LLMProcessor:
         }
 
 
-async def main():
-    processor = LLMProcessor()
-    with open("./data/flights.json", "r", encoding="utf-8") as f:
-        task_data = json.load(f)
-    result = await processor.refactor_db_schema(task_data)
-    result_str = json.dumps(result, ensure_ascii=False)
-    print(result_str)
+# async def main():
+#     processor = LLMProcessor()
+#     with open("./data/flights.json", "r", encoding="utf-8") as f:
+#         task_data = json.load(f)
+#     result = await processor.refactor_db_schema(task_data)
+#     result_str = json.dumps(result, ensure_ascii=False)
+#     print(result_str)
 
 
-if __name__ == "__main__":
-    asyncio.run(main())
+# if __name__ == "__main__":
+#     asyncio.run(main())
 
 
 async def process_task(task_data: dict, db_pool: ThreadedConnectionPool):
@@ -407,7 +407,6 @@ async def process_task(task_data: dict, db_pool: ThreadedConnectionPool):
     Обработка одной задачи
     """
     task_id = task_data["task_id"]
-    body = task_data["body"]
 
     try:
         # Обновляем статус на processing
@@ -440,7 +439,7 @@ async def process_task(task_data: dict, db_pool: ThreadedConnectionPool):
                     SET status = %s, result_data = %s, progress = %s, updated_at = NOW()
                     WHERE task_id = %s
                 """,
-                    ("completed", json.dumps(result), 100, task_id),
+                    ("completed", json.dumps(result, ensure_ascii=False), 100, task_id),
                 )
                 conn.commit()
         finally:
@@ -472,38 +471,92 @@ async def kafka_worker():
     """
     Основной воркер для обработки сообщений из Kafka
     """
-    # Подключение к БД
-    db_pool = ThreadedConnectionPool(
-        Config.DB_POOL_MIN,
-        Config.DB_POOL_MAX,
-        host=Config.POSTGRES_HOST,
-        port=Config.POSTGRES_PORT,
-        database=Config.POSTGRES_DB,
-        user=Config.POSTGRES_USER,
-        password=Config.POSTGRES_PASSWORD,
-    )
+    worker_logger.info("Инициализация воркера...")
 
-    # Kafka consumer (асинхронный)
+    # Подключение к БД
+    try:
+        db_pool = ThreadedConnectionPool(
+            Config.DB_POOL_MIN,
+            Config.DB_POOL_MAX,
+            host=Config.POSTGRES_HOST,
+            port=Config.POSTGRES_PORT,
+            database=Config.POSTGRES_DB,
+            user=Config.POSTGRES_USER,
+            password=Config.POSTGRES_PASSWORD,
+        )
+        worker_logger.info("Пул соединений с БД создан успешно")
+    except Exception as e:
+        worker_logger.error(f"Ошибка при создании пула соединений с БД: {e}")
+        raise
+
+    # Kafka consumer (асинхронный) с исправленными настройками
     consumer = AIOKafkaConsumer(
         Config.KAFKA_TOPIC,
         bootstrap_servers=Config.KAFKA_BOOTSTRAP_SERVERS,
         value_deserializer=lambda m: json.loads(m.decode("utf-8")),
         group_id="llm_workers",
         auto_offset_reset="earliest",
+        enable_auto_commit=True,
+        consumer_timeout_ms=2000,
     )
 
-    await consumer.start()
-    worker_logger.info("Worker started, waiting for tasks...")
+    worker_logger.info(
+        f"Подключение к Kafka (bootstrap_servers={Config.KAFKA_BOOTSTRAP_SERVERS})..."
+    )
+    worker_logger.info(f"Подписка на топик: {Config.KAFKA_TOPIC}, группа: llm_workers")
+
+    max_retries = 10
+    retry_delay = 3
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            await consumer.start()
+            worker_logger.info("✅ Kafka Consumer успешно подключен и запущен")
+
+            # Проверяем назначенные партиции
+            await asyncio.sleep(2)  # Даем время на присоединение к группе
+            partitions = consumer.assignment()
+            worker_logger.info(f"Назначенные партиции: {partitions}")
+
+            break
+        except Exception as e:
+            worker_logger.error(
+                f"❌ Попытка {attempt}/{max_retries} подключения к Kafka не удалась: {e}"
+            )
+            if attempt < max_retries:
+                worker_logger.info(f"Повторная попытка через {retry_delay} секунд...")
+                await asyncio.sleep(retry_delay)
+            else:
+                worker_logger.error(
+                    "Не удалось подключиться к Kafka после всех попыток"
+                )
+                db_pool.closeall()
+                raise
+
+    worker_logger.info(
+        f"🚀 Воркер запущен, ожидание задач из топика '{Config.KAFKA_TOPIC}'..."
+    )
 
     try:
+        message_count = 0
         async for message in consumer:
+            message_count += 1
             task_data = message.value
-            worker_logger.info(f"Received task: {task_data['task_id']}")
+            worker_logger.info(
+                f"📥 Получена задача #{message_count}: {task_data['task_id']} "
+                f"(partition={message.partition}, offset={message.offset})"
+            )
             await process_task(task_data, db_pool)
+    except KeyboardInterrupt:
+        worker_logger.info("Получен сигнал остановки (Ctrl+C)")
+    except Exception as e:
+        worker_logger.error(f"Критическая ошибка в воркере: {e}", exc_info=True)
     finally:
+        worker_logger.info("Остановка воркера...")
         await consumer.stop()
         db_pool.closeall()
+        worker_logger.info("Воркер остановлен")
 
 
-# if __name__ == "__main__":
-#     asyncio.run(kafka_worker())
+if __name__ == "__main__":
+    asyncio.run(kafka_worker())

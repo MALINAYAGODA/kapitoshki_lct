@@ -1,0 +1,5 @@
+dev/
+data/
+response/
+*.log
+.gitignore

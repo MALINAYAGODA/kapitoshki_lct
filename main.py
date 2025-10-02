@@ -4,6 +4,7 @@
 """
 
 # main.py
+import asyncio
 import json
 import logging
 import sys
@@ -151,22 +152,39 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info("Запуск приложения...")
 
+    logger.info("Инициализация Kafka Producer")
+    app.state.kafka_producer = AIOKafkaProducer(
+        bootstrap_servers=Config.KAFKA_BOOTSTRAP_SERVERS,
+        value_serializer=lambda v: json.dumps(v).encode("utf-8"),
+    )
+
+    max_retries = 10
+    retry_delay = 3
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            await app.state.kafka_producer.start()
+            break
+        except Exception as e:
+            logger.error(
+                f"❌ Попытка {attempt}/{max_retries} подключения к Kafka не удалась: {e}"
+            )
+            if attempt < max_retries:
+                logger.info(f"Повторная попытка через {retry_delay} секунд...")
+                await asyncio.sleep(retry_delay)
+            else:
+                logger.error("Не удалось подключиться к Kafka после всех попыток")
+                raise
+
+    logger.info(f"🚀 Продюсер готов пиндюрить данные в '{Config.KAFKA_TOPIC}'...")
+
     try:
+        logger.info("Инициализация Connection Pool")
         app.state.db_pool = get_db_pool()
         init_db_schema(app.state.db_pool)
-
-        # Инициализация Kafka producer
-        logger.info("Инициализация Kafka Producer")
-        app.state.kafka_producer = AIOKafkaProducer(
-            bootstrap_servers=Config.KAFKA_BOOTSTRAP_SERVERS,
-            value_serializer=lambda v: json.dumps(v).encode("utf-8"),
-        )
-        await app.state.kafka_producer.start()
-        logger.info("Kafka Producer запущен успешно")
-
         logger.info("Приложение успешно запущено")
     except Exception as e:
-        logger.error(f"Ошибка при запуске приложения: {e}")
+        logger.error(f"Ошибка при создании connection pool: {e}")
         raise
 
     yield
