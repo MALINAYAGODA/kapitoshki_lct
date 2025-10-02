@@ -1,9 +1,8 @@
 import json
 
-from get_counts import get_counts
-from tools.models import DDLGenerationOutput
-from tools.prompts import DDL_PROMPT, INPUT_DDL_PROMPT
-from utils import (
+from src.get_counts import get_counts
+from src.prompts import DDL_PROMPT, INPUT_DDL_PROMPT
+from src.utils import (
     calculate_and_print_tokens,
     get_database_config_from_data,
     get_openai_client,
@@ -11,6 +10,7 @@ from utils import (
     make_openai_request,
     save_json_file,
 )
+from src.models import DDLGenerationOutput
 
 client = get_openai_client()
 model_name = "gpt-4.1"

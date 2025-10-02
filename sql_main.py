@@ -1,6 +1,6 @@
-from tools.prompts import SQL_PROMPT, INPUT_SQL_PROMPT
-from tools.models import RewrittenQuery
-from utils import (
+from src.prompts import SQL_PROMPT, INPUT_SQL_PROMPT
+from src.models import RewrittenQuery
+from src.utils import (
     get_openai_client,
     load_json_file,
     save_json_file,
@@ -12,7 +12,7 @@ import json
 
 client = get_openai_client()
 model_name = "gpt-4.1"
-name_table = "data/questsH.json"
+name_table = "data/flights.json"
 
 input_data = load_json_file(name_table)
 ddl_output = load_json_file("response/ddl_output.json")

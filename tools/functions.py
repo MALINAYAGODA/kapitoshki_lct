@@ -7,13 +7,13 @@ from openai import OpenAI
 # Добавляем родительскую директорию в путь для импортов
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from tools.models import DDLGenerationOutput, MigrationOutput, RewrittenQuery
-from tools.prompts import DDL_PROMPT, INPUT_DDL_PROMPT, MIGRATION_PROMPT, INPUT_MIGRATION_PROMPT, SQL_PROMPT, INPUT_SQL_PROMPT
-from utils import get_database_config_from_data, make_openai_request, calculate_and_print_tokens, process_queries_batch
+from src.models import DDLGenerationOutput, MigrationOutput, RewrittenQuery
+from src.prompts import DDL_PROMPT, INPUT_DDL_PROMPT, MIGRATION_PROMPT, INPUT_MIGRATION_PROMPT, SQL_PROMPT, INPUT_SQL_PROMPT
+from src.utils import get_database_config_from_data, make_openai_request, calculate_and_print_tokens, process_queries_batch
 
 # Опциональный импорт get_counts (может отсутствовать trino)
 try:
-    from get_counts import get_counts
+    from src.get_counts import get_counts
 except ImportError:
     def get_counts(url, tables):
         return "Статистика недоступна (trino не установлен)"
@@ -98,7 +98,7 @@ def optimize_database_complete(client: OpenAI, input_data: Dict[str, Any], model
 
 # Примеры использования функций с данными flights.json
 if __name__ == "__main__":
-    from utils import get_openai_client, load_json_file, save_json_file
+    from src.utils import get_openai_client, load_json_file, save_json_file
     import time
 
     # Инициализация клиента и загрузка данных
