@@ -2,14 +2,13 @@ import json
 import sys
 import os
 from typing import Dict, Any, List, Tuple, Optional
-from openai import OpenAI
 
 # Добавляем родительскую директорию в путь для импортов
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.models import DDLGenerationOutput, MigrationOutput, RewrittenQuery
 from src.prompts import DDL_PROMPT, INPUT_DDL_PROMPT, MIGRATION_PROMPT, INPUT_MIGRATION_PROMPT, SQL_PROMPT, INPUT_SQL_PROMPT
-from src.utils import get_database_config_from_data, make_openai_request, calculate_and_print_tokens, process_queries_batch
+from src.utils import get_database_config_from_data, make_llm_request, calculate_and_print_tokens, process_queries_batch
 
 # Опциональный импорт get_counts (может отсутствовать trino)
 try:
@@ -19,7 +18,7 @@ except ImportError:
         return "Статистика недоступна (trino не установлен)"
 
 
-def generate_ddl(client: OpenAI, input_data: Dict[str, Any], model_name: str = "gpt-4.1", new_schema: str = "optimized") -> Tuple[DDLGenerationOutput, Dict[str, str], Tuple[int, int]]:
+def generate_ddl(input_data: Dict[str, Any], api_url: str = "http://213.181.111.2:57715/v1/chat/completions", new_schema: str = "optimized") -> Tuple[DDLGenerationOutput, Dict[str, str], Tuple[int, int]]:
     db_config = get_database_config_from_data(input_data, new_schema)
     input_ddl_json = json.dumps(input_data.get("ddl", []), ensure_ascii=False)
     queries_json = json.dumps(input_data.get("queries", []), ensure_ascii=False)
@@ -39,13 +38,14 @@ def generate_ddl(client: OpenAI, input_data: Dict[str, Any], model_name: str = "
         queries_json=queries_json, stats=stats
     )
     
-    result = make_openai_request(client, model_name, DDL_PROMPT, user_prompt, DDLGenerationOutput, "ddl_generation_output")
+    result = make_llm_request(DDL_PROMPT, user_prompt, DDLGenerationOutput, api_url)
     tokens = calculate_and_print_tokens(DDL_PROMPT, user_prompt, result)
     return result, db_config, tokens
 
 
-def generate_migration(client: OpenAI, input_data: Dict[str, Any], ddl_output: DDLGenerationOutput, 
-                      model_name: str = "gpt-4.1", db_config: Optional[Dict[str, str]] = None) -> Tuple[MigrationOutput, Tuple[int, int]]:
+def generate_migration(input_data: Dict[str, Any], ddl_output: DDLGenerationOutput, 
+                      api_url: str = "http://213.181.111.2:57715/v1/chat/completions", 
+                      db_config: Optional[Dict[str, str]] = None) -> Tuple[MigrationOutput, Tuple[int, int]]:
     if not db_config:
         db_config = get_database_config_from_data(input_data)
     
@@ -57,30 +57,31 @@ def generate_migration(client: OpenAI, input_data: Dict[str, Any], ddl_output: D
         new_schema=db_config["new_schema"], input_ddl_json=input_ddl_json, new_ddl_json=new_ddl_json
     )
     
-    result = make_openai_request(client, model_name, MIGRATION_PROMPT, user_prompt, MigrationOutput, "migration_output")
+    result = make_llm_request(MIGRATION_PROMPT, user_prompt, MigrationOutput, api_url)
     tokens = calculate_and_print_tokens(MIGRATION_PROMPT, user_prompt, result)
     return result, tokens
 
 
-def generate_sql_queries(client: OpenAI, queries: List[Dict[str, Any]], ddl_output: DDLGenerationOutput, 
-                        db_config: Dict[str, str], model_name: str = "gpt-4.1") -> Tuple[List[Dict[str, Any]], int, int]:
+def generate_sql_queries(queries: List[Dict[str, Any]], ddl_output: DDLGenerationOutput, 
+                        db_config: Dict[str, str], api_url: str = "http://213.181.111.2:57715/v1/chat/completions") -> Tuple[List[Dict[str, Any]], int, int]:
     new_ddl_json = json.dumps(ddl_output.model_dump(), ensure_ascii=False)
     system_prompt = SQL_PROMPT.format(catalog=db_config["catalog"], new_schema=db_config["new_schema"])
     
     return process_queries_batch(
-        client, model_name, system_prompt, queries, INPUT_SQL_PROMPT, RewrittenQuery, "rewritten_query",
-        {"catalog": db_config["catalog"], "new_schema": db_config["new_schema"], "new_ddl_json": new_ddl_json}
+        system_prompt, queries, INPUT_SQL_PROMPT, RewrittenQuery,
+        {"catalog": db_config["catalog"], "new_schema": db_config["new_schema"], "new_ddl_json": new_ddl_json},
+        api_url
     )
 
 
-def optimize_database_complete(client: OpenAI, input_data: Dict[str, Any], model_name: str = "gpt-4.1", 
+def optimize_database_complete(input_data: Dict[str, Any], api_url: str = "http://213.181.111.2:57715/v1/chat/completions", 
                               new_schema: str = "optimized") -> Dict[str, Any]:
-    ddl_result, db_config, ddl_tokens = generate_ddl(client, input_data, model_name, new_schema)
-    migration_result, migration_tokens = generate_migration(client, input_data, ddl_result, model_name, db_config)
+    ddl_result, db_config, ddl_tokens = generate_ddl(input_data, api_url, new_schema)
+    migration_result, migration_tokens = generate_migration(input_data, ddl_result, api_url, db_config)
     
     queries = input_data.get("queries", [])
     if queries:
-        rewritten_queries, sql_input_tokens, sql_output_tokens = generate_sql_queries(queries, ddl_result, db_config, model_name)
+        rewritten_queries, sql_input_tokens, sql_output_tokens = generate_sql_queries(queries, ddl_result, db_config, api_url)
     else:
         rewritten_queries, sql_input_tokens, sql_output_tokens = [], 0, 0
     
@@ -98,19 +99,18 @@ def optimize_database_complete(client: OpenAI, input_data: Dict[str, Any], model
 
 # Примеры использования функций с данными flights.json
 if __name__ == "__main__":
-    from src.utils import get_openai_client, load_json_file, save_json_file
+    from src.utils import load_json_file, save_json_file
     import time
 
-    # Инициализация клиента и загрузка данных
-    client = get_openai_client()
+    # Загрузка данных
     input_data = load_json_file("data/flights.json")
+    api_url = "http://213.181.111.2:57715/v1/chat/completions"
     
     print("=== Пример 1: Генерация DDL ===")
     start = time.time()
     ddl_result, db_config, ddl_tokens = generate_ddl(
-        client=client,
         input_data=input_data,
-        model_name="gpt-4.1",
+        api_url=api_url,
         new_schema="flights_optimized"
     )
     save_json_file(ddl_result.model_dump(), "response/flights_ddl_output.json")
@@ -120,10 +120,9 @@ if __name__ == "__main__":
     print("\n=== Пример 2: Генерация миграций ===")
     start = time.time()
     migration_result, migration_tokens = generate_migration(
-        client=client,
         input_data=input_data,
         ddl_output=ddl_result,
-        model_name="gpt-4.1",
+        api_url=api_url,
         db_config=db_config
     )
     save_json_file(migration_result.model_dump(), "response/flights_migration_output.json")
@@ -132,13 +131,12 @@ if __name__ == "__main__":
     
     print("\n=== Пример 3: Переписывание SQL запросов ===")
     start = time.time()
-    queries = input_data.get("queries", [])  # Берем первые 3 запроса для примера
+    queries = input_data.get("queries", [])
     rewritten_queries, sql_input_tokens, sql_output_tokens = generate_sql_queries(
-        client=client,
         queries=queries,
         ddl_output=ddl_result,
         db_config=db_config,
-        model_name="gpt-4.1"
+        api_url=api_url
     )
     save_json_file({"queries": rewritten_queries}, "response/flights_sql_rewritten_output.json")
     print(f"SQL запросы переписаны. Токены: вход={sql_input_tokens}, выход={sql_output_tokens}")
@@ -146,9 +144,8 @@ if __name__ == "__main__":
     
     # print("\n=== Пример 4: Полная оптимизация ===")
     # complete_result = optimize_database_complete(
-    #     client=client,
     #     input_data=input_data,
-    #     model_name="gpt-4.1",
+    #     api_url=api_url,
     #     new_schema="flights_complete_optimized"
     # )
     # save_json_file(complete_result, "response/flights_complete_optimization.json")

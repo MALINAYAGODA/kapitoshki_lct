@@ -1,20 +1,21 @@
 import json
+import time
 
 from src.get_counts import get_counts
 from src.prompts import DDL_PROMPT, INPUT_DDL_PROMPT
 from src.utils import (
     calculate_and_print_tokens,
     get_database_config_from_data,
-    get_openai_client,
     load_json_file,
-    make_openai_request,
+    make_llm_request,
     save_json_file,
 )
 from src.models import DDLGenerationOutput
 
-client = get_openai_client()
-model_name = "gpt-4.1"
-name_table = "data/questsH.json"
+api_url = "http://213.181.111.2:57715/v1/chat/completions"
+name_table = "data/flights.json"
+
+start_time = time.time()
 
 input_data = load_json_file(name_table)
 
@@ -41,14 +42,11 @@ user_prompt = INPUT_DDL_PROMPT.format(
     stats=counts,
 )
 
-# Выполняем запрос к OpenAI API
-ddl_out = make_openai_request(
-    client=client,
-    model_name=model_name,
+ddl_out = make_llm_request(
     system_prompt=system_prompt,
     user_prompt=user_prompt,
     response_schema=DDLGenerationOutput,
-    schema_name="ddl_generation_output",
+    api_url=api_url,
 )
 
 # Сохраняем результат
@@ -56,3 +54,7 @@ save_json_file(ddl_out.model_dump(), "response/ddl_output.json")
 
 # Считаем и выводим токены
 calculate_and_print_tokens(system_prompt, user_prompt, ddl_out)
+
+# Выводим время выполнения
+elapsed_time = time.time() - start_time
+print(f"\n⏱️  Время выполнения: {elapsed_time:.2f} секунд")

@@ -53,7 +53,6 @@ def setup_worker_logging():
     # Уменьшаем уровень логирования для сторонних библиотек
     logging.getLogger("aiokafka").setLevel(logging.WARNING)
     logging.getLogger("kafka").setLevel(logging.WARNING)
-    logging.getLogger("openai").setLevel(logging.WARNING)
     logging.getLogger("httpx").setLevel(logging.WARNING)
 
     return logging.getLogger(__name__)
@@ -63,17 +62,13 @@ worker_logger = setup_worker_logging()
 
 
 class LLMProcessor:
-    """Обработчик для работы с LLM через AsyncOpenAI"""
+    """Обработчик для работы с LLM через HTTP API"""
 
-    model_name = "gpt-4.1"
-
-    def __init__(self, api_key: str = None):
-        from openai import AsyncOpenAI
-
-        if api_key is None:
-            api_key = "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"
-
-        self.client = AsyncOpenAI(api_key=api_key)
+    def __init__(self, api_url: str = "http://213.181.111.2:57715/v1/chat/completions"):
+        import httpx
+        
+        self.api_url = api_url
+        self.client = httpx.AsyncClient(timeout=300.0)
         self.logger = logging.getLogger(self.__class__.__name__)
 
     def parse_catalog_and_schema_from_ddl(
@@ -120,7 +115,7 @@ class LLMProcessor:
         try:
             import tiktoken
 
-            encoding = tiktoken.encoding_for_model("gpt-4")
+            encoding = tiktoken.get_encoding("cl100k_base")
             return len(encoding.encode(text))
         except ImportError:
             # Грубая оценка если tiktoken не установлен
@@ -142,58 +137,85 @@ class LLMProcessor:
 
         return input_tokens, output_tokens
 
-    async def make_openai_request(
+    def extract_json_from_text(self, text: str) -> dict[str, Any]:
+        """Извлекает JSON из текста, который может содержать дополнительный текст."""
+        text = re.sub(r'```json\s*', '', text)
+        text = re.sub(r'```\s*$', '', text)
+        
+        json_pattern = r'\{.*\}'
+        match = re.search(json_pattern, text, re.DOTALL)
+        
+        if match:
+            json_str = match.group(0)
+            try:
+                return json.loads(json_str)
+            except json.JSONDecodeError:
+                pass
+        
+        try:
+            return json.loads(text.strip())
+        except json.JSONDecodeError as e:
+            raise Exception(f"Не удалось извлечь валидный JSON из ответа: {text[:200]}... Ошибка: {e}")
+
+    async def make_llm_request(
         self,
-        # model_name: str,
         system_prompt: str,
         user_prompt: str,
         response_schema: BaseModel,
-        schema_name: str,
         temperature: float = 0,
-        seed: int = 42,
     ) -> Any:
         """
-        Асинхронная функция для запросов в OpenAI API
+        Асинхронная функция для запросов к LLM API
         """
         self.logger.info(
-            f"Выполнение запроса к OpenAI API (model={self.model_name}, temperature={temperature})"
+            f"Выполнение запроса к LLM API (temperature={temperature})"
         )
         try:
-            response = await self.client.chat.completions.create(
-                model=self.model_name,
-                temperature=temperature,
-                seed=seed,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                response_format={
-                    "type": "json_schema",
-                    "json_schema": {
-                        "name": schema_name,
-                        "schema": response_schema.model_json_schema(),
-                    },
-                },
+            enhanced_system_prompt = f"""{system_prompt}
+
+ВАЖНО: Ответ должен быть в формате JSON, соответствующем следующей схеме:
+{json.dumps(response_schema.model_json_schema(), ensure_ascii=False, indent=2)}
+
+Верни только валидный JSON без дополнительного текста."""
+
+            response = await self.client.post(
+                self.api_url,
+                json={
+                    "messages": [
+                        {"role": "system", "content": enhanced_system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    "temperature": temperature
+                }
             )
 
-            result = response_schema.model_validate_json(
-                response.choices[0].message.content
-            )
+            if response.status_code != 200:
+                raise Exception(f"HTTP ошибка {response.status_code}: {response.text}")
+            
+            response_data = response.json()
+            content = response_data['choices'][0]['message']['content']
+            
+            json_content = self.extract_json_from_text(content)
+            
+            if 'properties' in json_content and isinstance(json_content['properties'], dict):
+                json_content = json_content['properties']
+            
+            result = response_schema.model_validate(json_content)
 
             # Подсчет токенов
             input_tokens, output_tokens = self.calculate_tokens(
                 system_prompt, user_prompt, result
             )
             self.logger.info(
-                f"Запрос к OpenAI API выполнен успешно. "
+                f"Запрос к LLM API выполнен успешно. "
                 f"Токены: вход={input_tokens:,}, выход={output_tokens:,}"
             )
 
             return result
 
         except Exception as e:
-            self.logger.error(f"Ошибка при выполнении запроса к OpenAI API: {e}")
-            raise Exception(f"Ошибка при выполнении запроса к OpenAI API: {e}")
+            self.logger.error(f"Ошибка при выполнении запроса к LLM API: {e}")
+            raise Exception(f"Ошибка при выполнении запроса к LLM API: {e}")
 
     async def process_queries_batch(
         self,
@@ -201,7 +223,6 @@ class LLMProcessor:
         queries: list[dict[str, Any]],
         user_prompt_template: str,
         response_schema: BaseModel,
-        schema_name: str,
         additional_data: Optional[dict[str, Any]] = None,
     ) -> tuple[list[dict[str, Any]], int, int]:
         """
@@ -230,11 +251,10 @@ class LLMProcessor:
                 user_prompt = user_prompt_template.format(**template_data)
 
                 # Делаем запрос к API
-                result = await self.make_openai_request(
+                result = await self.make_llm_request(
                     system_prompt=system_prompt,
                     user_prompt=user_prompt,
                     response_schema=response_schema,
-                    schema_name=schema_name,
                 )
 
                 # Сохраняем результат с queryid из исходного запроса
@@ -298,12 +318,11 @@ class LLMProcessor:
             stats=counts,
         )
 
-        # Выполняем запрос к OpenAI API
-        ddl_out = await self.make_openai_request(
+        # Выполняем запрос к LLM API
+        ddl_out = await self.make_llm_request(
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             response_schema=DDLGenerationOutput,
-            schema_name="ddl_generation_output",
         )
 
         return ddl_out
@@ -326,12 +345,11 @@ class LLMProcessor:
             new_ddl_json=new_ddl_json,
         )
 
-        # Выполняем запрос к OpenAI API
-        migration_out = await self.make_openai_request(
+        # Выполняем запрос к LLM API
+        migration_out = await self.make_llm_request(
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             response_schema=MigrationOutput,
-            schema_name="migration_output",
         )
 
         return migration_out
@@ -356,7 +374,6 @@ class LLMProcessor:
             queries=queries,
             user_prompt_template=INPUT_SQL_PROMPT,
             response_schema=RewrittenQuery,
-            schema_name="rewritten_query",
             additional_data={
                 "catalog": db_config["catalog"],
                 "new_schema": db_config["new_schema"],

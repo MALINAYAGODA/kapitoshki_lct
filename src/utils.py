@@ -1,14 +1,9 @@
-from openai import OpenAI
-from tools.count_tokens import count_tokens
+from dev.tools.count_tokens import count_tokens
 import json
 import re
+import requests
 from typing import Dict, Any, Optional, List, Tuple
 from pydantic import BaseModel
-
-
-def get_openai_client() -> OpenAI:
-    api_key = "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"
-    return OpenAI(api_key=api_key)
 
 
 def load_json_file(filename: str) -> Dict[str, Any]:
@@ -21,38 +16,45 @@ def save_json_file(data: Dict[str, Any], filename: str) -> None:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 
-def make_openai_request(
-    client: OpenAI,
-    model_name: str,
+def make_llm_request(
     system_prompt: str,
     user_prompt: str,
     response_schema: BaseModel,
-    schema_name: str,
-    temperature: float = 0,
-    seed: int = 42
+    api_url: str = "http://213.181.111.2:57715/v1/chat/completions",
+    temperature: float = 0
 ) -> Any:
+    """Запрос к LLM API с парсингом JSON из текста."""
     try:
-        response = client.chat.completions.create(
-            model=model_name,
-            temperature=temperature,
-            seed=seed,
-            messages=[
-                {"role": "system", "content": system_prompt},
+        enhanced_system_prompt = f"""{system_prompt}
+
+ВАЖНО: Ответ должен быть в формате JSON, соответствующем следующей схеме:
+{json.dumps(response_schema.model_json_schema(), ensure_ascii=False, indent=2)}
+
+Верни только валидный JSON без дополнительного текста."""
+
+        response = requests.post(api_url, json={
+            "messages": [
+                {"role": "system", "content": enhanced_system_prompt},
                 {"role": "user", "content": user_prompt}
             ],
-            response_format={
-                "type": "json_schema",
-                "json_schema": {
-                    "name": schema_name,
-                    "schema": response_schema.model_json_schema()
-                }
-            }
-        )
+            "temperature": temperature
+        })
         
-        return response_schema.model_validate_json(response.choices[0].message.content)
+        if response.status_code != 200:
+            raise Exception(f"HTTP ошибка {response.status_code}: {response.text}")
+        
+        response_data = response.json()
+        content = response_data['choices'][0]['message']['content']
+        
+        json_content = extract_json_from_text(content)
+        
+        if 'properties' in json_content and isinstance(json_content['properties'], dict):
+            json_content = json_content['properties']
+        
+        return response_schema.model_validate(json_content)
     
     except Exception as e:
-        raise Exception(f"Ошибка при выполнении запроса к OpenAI API: {e}")
+        raise Exception(f"Ошибка при выполнении запроса к LLM API: {e}")
 
 
 def calculate_and_print_tokens(
@@ -79,53 +81,45 @@ def calculate_and_print_tokens(
 
 
 def process_queries_batch(
-    client: OpenAI,
-    model_name: str,
     system_prompt: str,
     queries: List[Dict[str, Any]],
     user_prompt_template: str,
     response_schema: BaseModel,
-    schema_name: str,
-    additional_data: Optional[Dict[str, Any]] = None
+    additional_data: Optional[Dict[str, Any]] = None,
+    api_url: str = "http://213.181.111.2:57715/v1/chat/completions"
 ) -> Tuple[List[Dict[str, Any]], int, int]:
+    """Обработка запросов через LLM API."""
     processed_queries = []
     total_input_tokens = 0
     total_output_tokens = 0
     
-    print(f"Обрабатываем {len(queries)} запросов...")
+    print(f"Обрабатываем {len(queries)} запросов через LLM API...")
     
     for i, query_data in enumerate(queries, 1):
         print(f"\nОбработка запроса {i}/{len(queries)}: {query_data['queryid']}")
         
         try:
-            # Подготавливаем данные для шаблона
             template_data = {
                 "query_json": json.dumps(query_data, ensure_ascii=False)
             }
             if additional_data:
                 template_data.update(additional_data)
             
-            # Формируем пользовательский промпт
             user_prompt = user_prompt_template.format(**template_data)
             
-            # Делаем запрос к API
-            result = make_openai_request(
-                client=client,
-                model_name=model_name,
+            result = make_llm_request(
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
                 response_schema=response_schema,
-                schema_name=schema_name
+                api_url=api_url
             )
             
-            # Сохраняем результат с queryid из исходного запроса
             processed_result = {
                 "queryid": query_data['queryid'],
                 "query": result.query
             }
             processed_queries.append(processed_result)
             
-            # Считаем токены
             input_tokens = count_tokens(system_prompt) + count_tokens(user_prompt)
             output_tokens = count_tokens(result.query)
             total_input_tokens += input_tokens
@@ -135,7 +129,6 @@ def process_queries_batch(
             
         except Exception as e:
             print(f"  ОШИБКА при обработке запроса {query_data['queryid']}: {e}")
-            # Добавляем запрос с ошибкой для отладки
             processed_queries.append({
                 "queryid": query_data['queryid'],
                 "query": f"-- ОШИБКА ОБРАБОТКИ: {e}\n{query_data['query']}",
@@ -187,5 +180,30 @@ def get_database_config_from_data(data: Dict[str, Any], new_schema: str = "optim
         "source_schema": source_schema or "public", 
         "new_schema": new_schema
     }
+
+
+
+
+def extract_json_from_text(text: str) -> Dict[str, Any]:
+    """Извлекает JSON из текста, который может содержать дополнительный текст."""
+    text = re.sub(r'```json\s*', '', text)
+    text = re.sub(r'```\s*$', '', text)
+    
+    json_pattern = r'\{.*\}'
+    match = re.search(json_pattern, text, re.DOTALL)
+    
+    if match:
+        json_str = match.group(0)
+        try:
+            return json.loads(json_str)
+        except json.JSONDecodeError:
+            pass
+    
+    try:
+        return json.loads(text.strip())
+    except json.JSONDecodeError as e:
+        raise Exception(f"Не удалось извлечь валидный JSON из ответа: {text[:200]}... Ошибка: {e}")
+
+
 
 

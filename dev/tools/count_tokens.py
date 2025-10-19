@@ -1,11 +1,11 @@
 import tiktoken
 
-def count_tokens(text: str, model: str = "gpt-4") -> int:
-    """Подсчитывает количество токенов для заданного текста и модели"""
+def count_tokens(text: str, model: str = "cl100k_base") -> int:
+    """Подсчитывает количество токенов для заданного текста"""
     try:
-        encoding = tiktoken.encoding_for_model(model)
+        encoding = tiktoken.get_encoding(model)
     except KeyError:
-        # Fallback для неизвестных моделей
+        # Fallback для неизвестных кодировок
         encoding = tiktoken.get_encoding("cl100k_base")
     
     return len(encoding.encode(text))
